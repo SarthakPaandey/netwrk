@@ -1,0 +1,10 @@
+pipelining: 3 REQUESTs sent back-to-back on ONE connection
+  resp id=1 status=200 body=b'hello file\n'
+  resp id=2 status=200 body=b'<html><body><h1>hello bhp'
+  resp id=3 status=404 body=b'not found'
+sent unknown frame type 0x09 (future v2 frame)
+  after unknown -> id=9 status=200 (MUST skip cleanly, keep open: PASS)
+  PING reply type=0x0 (want 0x0: PASS)
+  traversal '/../etc/passwd' -> 400 (PASS)
+  missing leading / 'nope' -> 400 (PASS)
+BHP EDGE: ALL PASS, connection stayed open throughout

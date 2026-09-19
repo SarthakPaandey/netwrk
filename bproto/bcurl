@@ -1,0 +1,136 @@
+#!/usr/bin/env python3
+"""
+bcurl — Track 2, the client.
+
+  $ ./bcurl -v localhost:9000/index.html
+
+  build the binary request frame
+  read the response, body to stdout
+  -v hexdumps every frame
+  exit non-zero on 4xx / 5xx
+  and never open a second connection
+
+One TCP connection for ALL paths given on the command line.
+"""
+import argparse
+import socket
+import struct
+import sys
+import time
+
+from bhp import (
+    MAGIC, HEADER_LEN, T_PING, T_REQUEST, T_RESPONSE, FLAG_END,
+    encode_header, decode_header, encode_request, decode_response,
+    hexdump,
+)
+
+
+def recv_exact(f, n):
+    buf = b""
+    while len(buf) < n:
+        chunk = f.read(n - len(buf))
+        if not chunk:
+            raise ConnectionError("EOF from server")
+        buf += chunk
+    return buf
+
+
+def parse_target(t):
+    # accept: localhost:9000/index.html, 127.0.0.1:9000/a.txt, host/path, host:port/path
+    if "://" in t:
+        t = t.split("://", 1)[1]
+    if "/" in t:
+        hostport, path = t.split("/", 1)
+        path = "/" + path
+    else:
+        hostport, path = t, "/"
+    if ":" in hostport:
+        host, port = hostport.rsplit(":", 1)
+        port = int(port)
+    else:
+        host, port = hostport, 9000
+    if not path.startswith("/"):
+        path = "/" + path
+    return host, port, path
+
+
+def main():
+    ap = argparse.ArgumentParser(prog="bcurl")
+    ap.add_argument("-v", "--verbose", action="store_true",
+                    help="hexdump every frame")
+    ap.add_argument("targets", nargs="+", help="host:port/path [...]")
+    ap.add_argument("--timeout", type=float, default=10.0)
+    args = ap.parse_args()
+
+    parsed = [parse_target(t) for t in args.targets]
+    hosts = {(h, p) for h, p, _ in parsed}
+    if len(hosts) != 1:
+        print("bcurl: all paths must share one host:port (never open a second connection)",
+              file=sys.stderr)
+        sys.exit(2)
+    host, port = parsed[0][0], parsed[0][1]
+
+    s = socket.create_connection((host, port), timeout=args.timeout)
+    f = s.makefile("rb")
+    failures = 0
+    try:
+        # connection preface, once
+        s.sendall(MAGIC)
+        if args.verbose:
+            print(f"> magic {MAGIC.hex()}  ({MAGIC!r})", file=sys.stderr)
+            print(hexdump(MAGIC, prefix="> "), file=sys.stderr)
+
+        reqid = 0
+        for _, _, path in parsed:
+            reqid = (reqid % 0xFFFF) + 1
+            payload = encode_request(path, [("host", host),
+                                            ("user-agent", "bcurl/BHP1"),
+                                            ("accept", "*/*")])
+            frame = encode_header(len(payload), T_REQUEST, FLAG_END, reqid) + payload
+            if args.verbose:
+                ln, ty, fl, rid, _ = decode_header(frame[:8])
+                print(f"> REQUEST id={rid} len={ln} type={ty:#04x} flags={fl:#04x} path={path}",
+                      file=sys.stderr)
+                print(hexdump(frame, prefix="> "), file=sys.stderr)
+            s.sendall(frame)
+
+            # read frames until the RESPONSE with our reqid arrives;
+            # skip (but -v dump) any unknown / interleaved frames.
+            while True:
+                hdr = recv_exact(f, HEADER_LEN)
+                length, ftype, flags, rid, _res = decode_header(hdr)
+                payload = recv_exact(f, length) if length else b""
+                raw = hdr + payload
+                if args.verbose:
+                    print(f"< frame len={length} type={ftype:#04x} flags={flags:#04x} id={rid}",
+                          file=sys.stderr)
+                    print(hexdump(raw, prefix="< "), file=sys.stderr)
+                if ftype == T_RESPONSE and rid == reqid:
+                    break
+                if ftype == T_PING:
+                    continue
+                # unknown type -> MUST skip cleanly (already consumed via length)
+                continue
+
+            status, hdrs, body = decode_response(payload)
+            if args.verbose:
+                print(f"< RESPONSE id={rid} status={status} headers={hdrs} body={len(body)}B",
+                      file=sys.stderr)
+            # body to stdout (binary-safe)
+            sys.stdout.buffer.write(body)
+            sys.stdout.buffer.flush()
+            if 400 <= status <= 599:
+                failures += 1
+    except (ConnectionError, socket.timeout, OSError) as e:
+        print(f"bcurl: connection failed: {e}", file=sys.stderr)
+        sys.exit(3)
+    finally:
+        try:
+            s.close()
+        except OSError:
+            pass
+    sys.exit(1 if failures else 0)
+
+
+if __name__ == "__main__":
+    main()

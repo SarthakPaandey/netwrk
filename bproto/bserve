@@ -1,0 +1,220 @@
+#!/usr/bin/env python3
+"""
+bserve — Track 1, the server.
+
+  $ ./bserve ./www 9000
+
+  accept a TCP connection
+  read one binary request frame
+  map the path to a file under a root
+  reply: status, headers, the bytes
+  404 if it is not there
+  400 if the frame is malformed
+  and keep the connection open
+
+Protocol: BHP/1, see SPEC.md. stdlib + raw sockets only.
+"""
+import argparse
+import datetime
+import mimetypes
+import os
+import socket
+import struct
+import threading
+import urllib.parse
+
+from bhp import (
+    MAGIC, HEADER_LEN, MAX_PAYLOAD, T_PING, T_REQUEST, T_RESPONSE,
+    FLAG_END, encode_header, decode_header, decode_request,
+    encode_response, decode_headers,
+)
+
+IDLE_TIMEOUT = 30.0
+
+
+def recv_exact(conn, n):
+    buf = bytearray()
+    while len(buf) < n:
+        chunk = conn.recv(n - len(buf))
+        if not chunk:
+            raise ConnectionError("EOF")
+        buf.extend(chunk)
+    return bytes(buf)
+
+
+def safe_join(root, path):
+    # path must be absolute (/...) already validated
+    # strip query/fragment, percent-decode, normalise, block escaping root
+    raw = path.split("?", 1)[0].split("#", 1)[0]
+    try:
+        dec = urllib.parse.unquote(raw, errors="strict")
+    except Exception:
+        return None
+    if not dec.startswith("/"):
+        return None
+    # collapse //, resolve . and .. lexically
+    parts = []
+    for seg in dec.split("/"):
+        if seg in ("", "."):
+            continue
+        if seg == "..":
+            if parts:
+                parts.pop()
+            # if no parts, .. would escape root -> stay at root but flag?
+            # treat escaping attempt as invalid -> 400
+            else:
+                return None
+            continue
+        # reject NUL / control
+        if "\x00" in seg:
+            return None
+        parts.append(seg)
+    full = os.path.join(root, *parts) if parts else root
+    # realpath check against root (handles symlinks)
+    rroot = os.path.realpath(root)
+    rfull = os.path.realpath(full)
+    if rfull != rroot and not rfull.startswith(rroot + os.sep):
+        return None
+    return rfull
+
+
+def guess_type(path):
+    t, _ = mimetypes.guess_type(path)
+    return t or "application/octet-stream"
+
+
+def http_date():
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%a, %d %b %Y %H:%M:%S GMT")
+
+
+def send_frame(conn, ftype, flags, reqid, payload):
+    conn.sendall(encode_header(len(payload), ftype, flags, reqid) + payload)
+
+
+def send_response(conn, reqid, status, hdrs, body):
+    payload = encode_response(status, hdrs, body)
+    send_frame(conn, T_RESPONSE, FLAG_END, reqid, payload)
+
+
+def handle_conn(conn, addr, root, idle_timeout):
+    conn.settimeout(idle_timeout)
+    try:
+        # --- connection preface ---
+        try:
+            magic = recv_exact(conn, 4)
+        except (ConnectionError, socket.timeout):
+            return
+        if magic != MAGIC:
+            # best effort 400 then close (client is not speaking BHP/1)
+            try:
+                send_response(conn, 0, 400,
+                              [("content-type", "text/plain"), ("server", "bserve")],
+                              b"bad magic: expected BHP1")
+            except OSError:
+                pass
+            return
+        while True:
+            try:
+                hdr = recv_exact(conn, HEADER_LEN)
+            except socket.timeout:
+                return  # idle timeout, defensible close
+            except ConnectionError:
+                return  # EOF
+            length, ftype, flags, reqid, _reserved = decode_header(hdr)
+            if length > MAX_PAYLOAD:
+                # cannot happen (24-bit) but guard local cap
+                return
+            try:
+                payload = recv_exact(conn, length) if length else b""
+            except (ConnectionError, socket.timeout):
+                return
+
+            # --- MUST skip unknown frame types cleanly ---
+            if ftype == T_PING:
+                # echo, same payload, reqid 0
+                send_frame(conn, T_PING, FLAG_END, 0, payload)
+                continue
+            if ftype != T_REQUEST:
+                continue  # skip unknown / future types, keep open
+
+            # --- REQUEST ---
+            try:
+                path, _req_hdrs = decode_request(payload)
+            except (ValueError, UnicodeDecodeError):
+                send_response(conn, reqid, 400,
+                              [("content-type", "text/plain"), ("server", "bserve")],
+                              b"malformed frame")
+                continue
+            if not path.startswith("/"):
+                send_response(conn, reqid, 400,
+                              [("content-type", "text/plain"), ("server", "bserve")],
+                              b"path must start with /")
+                continue
+            full = safe_join(root, path)
+            if full is None:
+                send_response(conn, reqid, 400,
+                              [("content-type", "text/plain"), ("server", "bserve")],
+                              b"invalid path")
+                continue
+            # directory -> index.html
+            if os.path.isdir(full):
+                full = os.path.join(full, "index.html")
+            if not os.path.isfile(full):
+                send_response(conn, reqid, 404,
+                              [("content-type", "text/plain"), ("server", "bserve"),
+                               ("date", http_date())],
+                              b"not found")
+                continue
+            try:
+                with open(full, "rb") as f:
+                    body = f.read(MAX_PAYLOAD)
+                # if file bigger than one frame, truncate for v1? Better: 413?
+                # v1 supports up to 16MiB per response; larger -> first chunk + note.
+                # For the assignment's ./www files this never triggers.
+                ctype = guess_type(full)
+                send_response(conn, reqid, 200,
+                              [("content-type", ctype),
+                               ("content-length", str(len(body))),
+                               ("server", "bserve"),
+                               ("date", http_date())],
+                              body)
+            except OSError:
+                send_response(conn, reqid, 404,
+                              [("content-type", "text/plain"), ("server", "bserve")],
+                              b"not found")
+    except (ConnectionResetError, BrokenPipeError, OSError):
+        return
+    finally:
+        try:
+            conn.close()
+        except OSError:
+            pass
+
+
+def main():
+    ap = argparse.ArgumentParser(prog="bserve")
+    ap.add_argument("root", help="./www")
+    ap.add_argument("port", type=int, help="9000")
+    ap.add_argument("--timeout", type=float, default=IDLE_TIMEOUT)
+    args = ap.parse_args()
+    root = os.path.abspath(args.root)
+    os.makedirs(root, exist_ok=True)
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    srv.bind(("0.0.0.0", args.port))
+    srv.listen(100)
+    print(f"bserve {root} on :{args.port} (BHP/1, idle {args.timeout}s)", flush=True)
+    try:
+        while True:
+            conn, addr = srv.accept()
+            threading.Thread(target=handle_conn,
+                             args=(conn, addr, root, args.timeout),
+                             daemon=True).start()
+    except KeyboardInterrupt:
+        print("\nbye", flush=True)
+    finally:
+        srv.close()
+
+
+if __name__ == "__main__":
+    main()

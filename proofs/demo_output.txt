@@ -1,0 +1,23 @@
+calc11 listening on 0.0.0.0:18111 (idle 10.0s) — Ctrl-C to stop
+bserve /Users/sarthakpandey/netwrk/bproto/www on :19111 (BHP/1, idle 30.0s)
+=== calculator marking (one socket) ===
+connected localhost:18111, 1 TCP handshake
+  OK  GET /add?a=2&b=3       -> 200 '5' (want 200 '5')
+  OK  GET /sub?a=10&b=4      -> 200 '6' (want 200 '6')
+  OK  GET /mul?a=6&b=7       -> 200 '42' (want 200 '42')
+  OK  GET /div?a=1&b=0       -> 400 'division by zero' (want 400 None)
+  OK  GET /pow?a=2&b=8       -> 404 'unknown path' (want 404 None)
+  OK  POST /add              -> 405 'use GET' (want 405 None)
+  socket still open: True (probe -> 200 '2')
+1 TCP handshake, 6 responses
+  no-Host probe -> 400 (want 400) OK
+=== bserve single ===
+<html><body><h1>hello bhp</h1></body></html>
+
+=== bserve multi (one connection, two files) ===
+hello file
+<html><body><h1>hello bhp</h1></body></html>
+
+=== bserve 404 (exit non-zero) ===
+not foundexit=1 as required
+=== DEMO PASS ===

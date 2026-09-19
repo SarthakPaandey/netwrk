@@ -1,0 +1,17 @@
+> magic 42485031  (b'BHP1')
+> 0000: 42 48 50 31                                       |BHP1|
+> REQUEST id=1 len=45 type=0x01 flags=0x01 path=/index.html
+> 0000: 00 00 2d 01 01 00 01 00 00 0b 2f 69 6e 64 65 78   |..-......./index|
+> 0010: 2e 68 74 6d 6c 03 01 00 09 6c 6f 63 61 6c 68 6f   |.html....localho|
+> 0020: 73 74 02 00 0a 62 63 75 72 6c 2f 42 48 50 31 03   |st...bcurl/BHP1.|
+> 0030: 00 03 2a 2f 2a                                    |..*/*|
+< frame len=106 type=0x02 flags=0x01 id=1
+< 0000: 00 00 6a 02 01 00 01 00 00 c8 04 07 00 09 74 65   |..j...........te|
+< 0010: 78 74 2f 68 74 6d 6c 08 00 02 34 35 09 00 06 62   |xt/html...45...b|
+< 0020: 73 65 72 76 65 0a 00 1d 53 61 74 2c 20 31 39 20   |serve...Sat, 19 |
+< 0030: 53 65 70 20 32 30 32 36 20 30 38 3a 30 35 3a 30   |Sep 2026 08:05:0|
+< 0040: 30 20 47 4d 54 3c 68 74 6d 6c 3e 3c 62 6f 64 79   |0 GMT<html><body|
+< 0050: 3e 3c 68 31 3e 68 65 6c 6c 6f 20 62 68 70 3c 2f   |><h1>hello bhp</|
+< 0060: 68 31 3e 3c 2f 62 6f 64 79 3e 3c 2f 68 74 6d 6c   |h1></body></html|
+< 0070: 3e 0a                                             |>.|
+< RESPONSE id=1 status=200 headers=[('content-type', 'text/html'), ('content-length', '45'), ('server', 'bserve'), ('date', 'Sat, 19 Sep 2026 08:05:00 GMT')] body=45B

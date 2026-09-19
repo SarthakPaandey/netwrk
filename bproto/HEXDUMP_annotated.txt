@@ -1,0 +1,89 @@
+BHP/1 annotated hexdump — one complete request and response
+Captured with:  ./bserve ./www 9000  &  ./bcurl -v localhost:9000/index.html
+File served: www/index.html = 45 bytes "<html><body><h1>hello bhp</h1></body></html>\n"
+================================================================
+
+CONNECTION PREFACE (client -> server, once per TCP connection)
+> 0000: 42 48 50 31    |BHP1|
+  42='B' 48='H' 50='P' 31='1'. If the server does not see exactly
+  these 4 bytes first, it answers 400/reqid 0 and closes.
+
+REQUEST FRAME (client -> server, REQUEST id=1, payload len 45 = 0x2d)
+> 0000: 00 00 2d 01 01 00 01 00   |..-.......|
+  00 00 2d  -> Length = 0x002d = 45 payload bytes follow
+  01        -> Type = 0x01 REQUEST
+  01        -> Flags = 0x01 END (single-frame message, v1 always sets)
+  00 01     -> Request ID = 1 (client incrementing; server must echo)
+  00        -> Reserved = 0 (ignore on receipt; growth room for v2)
+
+> 0000 (cont): 00 0b 2f 69 6e 64 65 78  |. ..../index|
+  00 0b     -> path_len = 11
+  2f 69 6e 64 65 78  -> "/index" ...
+
+> 0010: 2e 68 74 6d 6c 03 01 00 09 6c 6f 63 61 6c 68 6f  |.html....localho|
+  2e 68 74 6d 6c      -> "html"  (path = "/index.html", 11 bytes total)
+  03                  -> n_hdrs = 3
+  01                  -> hdr[0] code 0x01 = "host" (static table, no name bytes)
+  00 09               -> vlen = 9
+  6c 6f 63 61 6c 68 6f -> "localho" ...
+
+> 0020: 73 74 02 00 0a 62 63 75 72 6c 2f 42 48 50 31 03  |st...bcurl/BHP1.|
+  73 74               -> "st"    (value = "localhost", 9 bytes total)
+  02                  -> hdr[1] code 0x02 = "user-agent"
+  00 0a               -> vlen = 10
+  62 63 75 72 6c 2f 42 48 50 31 -> "bcurl/BHP1"
+  03                  -> hdr[2] code 0x03 = "accept"
+
+> 0030: 00 03 2a 2f 2a  |..*/*|
+  00 03               -> vlen = 3
+  2a 2f 2a            -> "*/*"
+  -- end of payload (8 header + 45 payload = 53 bytes on the wire) --
+
+RESPONSE FRAME (server -> client, RESPONSE id=1, payload len 106 = 0x6a)
+< 0000: 00 00 6a 02 01 00 01 00  |..j.......|
+  00 00 6a  -> Length = 0x006a = 106
+  02        -> Type = 0x02 RESPONSE
+  01        -> Flags = 0x01 END
+  00 01     -> Request ID = 1 (echoed)
+  00        -> Reserved = 0
+
+< 0000 (cont): 00 c8 04 07 00 09 74 65  |......te|
+  00 c8     -> status = 0x00c8 = 200
+  04        -> n_hdrs = 4
+  07        -> hdr[0] code 0x07 = "content-type"
+  00 09     -> vlen = 9
+  74 65     -> "te" ...
+
+< 0010: 78 74 2f 68 74 6d 6c 08 00 02 34 35 09 00 06 62  |xt/html...45...b|
+  78 74 2f 68 74 6d 6c -> "xt/html" (value = "text/html")
+  08                  -> hdr[1] code 0x08 = "content-length"
+  00 02               -> vlen = 2
+  34 35               -> "45" (MUST match body len; framing is authoritative)
+  09                  -> hdr[2] code 0x09 = "server"
+  00 06               -> vlen = 6
+  62                  -> "b" ...
+
+< 0020: 73 65 72 76 65 0a 00 1d 53 61 74 2c 20 31 39 20  |serve...Sat, 19 |
+  73 65 72 76 65      -> "serve" (value = "bserve")
+  0a                  -> hdr[3] code 0x0A = "date"
+  00 1d               -> vlen = 29
+  53 61 74 2c 20 31 39 20 -> "Sat, 19 " ...
+
+< 0030: 53 65 70 20 32 30 32 36 20 30 37 3a 35 37 3a 31  |Sep 2026 07:57:1|
+  -> "Sep 2026 07:57:1" ...
+
+< 0040: 35 20 47 4d 54 3c 68 74 6d 6c 3e 3c 62 6f 64 79  |5 GMT<html><body|
+  35 20 47 4d 54      -> "5 GMT" (date done; 29 bytes total)
+  3c 68 74 6d 6c 3e 3c 62 6f 64 79 -> "<html><body" (BODY STARTS HERE:
+  body = remainder of payload = 45 bytes, no separate length field)
+
+< 0050: 3e 3c 68 31 3e 68 65 6c 6c 6f 20 62 68 70 3c 2f  |><h1>hello bhp</|
+< 0060: 68 31 3e 3c 2f 62 6f 64 79 3e 3c 2f 68 74 6d 6c  |h1></body></html|
+< 0070: 3e 0a  |>.|
+  3e 0a -> ">\n" (body ends; 8 header + 106 payload = 114 bytes on wire)
+
+Arithmetic check: RESPONSE payload = 2 (status) + 1 (n_hdrs)
+  + hdr0 (1+2+9=12) + hdr1 (1+2+2=5) + hdr2 (1+2+6=9) + hdr3 (1+2+29=32)
+  = 61 header bytes + 45 body = 106 = Length. Body delivered to stdout.
+  bcurl exits 0 (2xx). A 4xx/5xx would exit 1. Connection stays open
+  for the next REQUEST; unknown Type would be skipped via Length.

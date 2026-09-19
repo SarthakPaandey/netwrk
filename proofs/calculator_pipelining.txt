@@ -1,0 +1,10 @@
+pipelining: all six sent at once on ONE socket
+  resp[0] -> 200 '5'
+  resp[1] -> 200 '6'
+  resp[2] -> 200 '42'
+  resp[3] -> 200 '3'
+  resp[4] -> 404 'unknown path'
+  resp[5] -> 405 'use GET'
+POST with Content-Length:5 body=hello -> 405 (framing keeps next request intact)
+next request after POST body -> 200 '15' (byte n+1 belonged to somebody else: OK)
+PIPELINING + FRAMING: PASS
