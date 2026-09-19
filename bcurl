@@ -1,0 +1,4 @@
+#!/bin/sh
+# Top-level wrapper so the exact brief command works:
+#   ./bcurl -v localhost:9000/index.html
+exec python3 bproto/bcurl "$@"

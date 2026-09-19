@@ -1,0 +1,4 @@
+#!/bin/sh
+# Top-level wrapper so the exact brief command works:
+#   ./bserve ./www 9000
+exec python3 bproto/bserve "$@"
